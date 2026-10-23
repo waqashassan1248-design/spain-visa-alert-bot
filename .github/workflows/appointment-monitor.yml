@@ -1,0 +1,53 @@
+name: Public Appointment Status Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub scheduled workflows use UTC. Runs every 30 minutes.
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: public-appointment-status-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore last status
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          key: visa-alert-state-${{ github.run_id }}
+          restore-keys: |
+            visa-alert-state-
+
+      - name: Check public status page
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PUBLIC_STATUS_URL: ${{ secrets.PUBLIC_STATUS_URL }}
+          APPOINTMENT_AVAILABLE_TEXT: ${{ secrets.APPOINTMENT_AVAILABLE_TEXT }}
+          NO_APPOINTMENTS_TEXT: ${{ secrets.NO_APPOINTMENTS_TEXT }}
+          MONITOR_STATE_FILE: .monitor-state/state.json
+        run: python monitor.py
+
+      - name: Save last status
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: visa-alert-state-${{ github.run_id }}
