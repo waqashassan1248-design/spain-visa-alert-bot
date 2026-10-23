@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import re
@@ -56,8 +55,7 @@ def main():
     )
     try:
         with urllib.request.urlopen(request, timeout=25) as response:
-            content_type = response.headers.get("Content-Type", "")
-            if response.status != 200:
+                        if response.status != 200:
                 raise RuntimeError(f"Public status page returned HTTP {response.status}.")
             raw = response.read(MAX_PAGE_BYTES + 1)
     except urllib.error.HTTPError as exc:
