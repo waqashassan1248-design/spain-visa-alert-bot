@@ -1,0 +1,17 @@
+name: Workflow Visibility Check
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm GitHub Actions is running
+        run: echo "GitHub Actions is enabled and this workflow is running."
