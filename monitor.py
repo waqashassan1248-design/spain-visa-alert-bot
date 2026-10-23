@@ -67,10 +67,10 @@ def main():
         raise RuntimeError("Status page exceeded the 2 MB safety limit.")
 
     text = raw.decode("utf-8", errors="replace")
-    text = re.sub(r"<script\\b[^>]*>.*?</script\\s*>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<style\\b[^>]*>.*?</style\\s*>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", text, flags=re.I | re.S)
     text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
     lowered = text.casefold()
 
     # Stop when the page requires an interactive or anti-bot challenge.
@@ -94,7 +94,7 @@ def main():
     if status == "available" and previous != "available":
         send_telegram_message(
             "⚠️ Spain visa appointment status may have changed. The configured availability text was found on the public page. "
-            "Please open the official BLS website and confirm the details manually:\\n" + url
+            "Please open the official BLS website and confirm the details manually:\n" + url
         )
         print("Availability phrase detected; Telegram alert sent.")
     elif status == "not_available":
