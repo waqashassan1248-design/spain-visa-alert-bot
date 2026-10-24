@@ -87,7 +87,7 @@ def solve_numeric_captcha(captcha_element):
 
     if matched_numbers:
       print(f"[✔] Match Found! Numbers appearing 3+ times: {matched_numbers}")
-      # Jo number repeat ho raha hai, usko return karein (e.g., pehla match)
+      # Jo number repeat ho raha hai, usko return karein
       return matched_numbers[0]
     else:
       print("[✖] No number found repeating 3 or more times.")
@@ -128,9 +128,11 @@ def main():
 
     # --- CAPTCHA SOLVER INTEGRATION ---
     try:
-      # NOTE: Neeche diye gaye XPaths ko apne page ke element IDs ke mutabiq adjust kar lein
+      # BLS captcha image aur input ke flexible XPaths
       captcha_img = WebDriverWait(driver, 10).until(
-          EC.presence_of_element_located((By.XPATH, "//img[@id='captcha-img']"))
+          EC.presence_of_element_located(
+              (By.XPATH, "//img[contains(@id, 'Captcha') or contains(@src, 'Captcha')]")
+          )
       )
 
       solution = solve_numeric_captcha(captcha_img)
@@ -138,16 +140,14 @@ def main():
       if solution:
         # Captcha input field mein solution enter karein
         captcha_input = driver.find_element(
-            By.XPATH, "//input[@id='captcha-input']"
+            By.XPATH, "//input[contains(@id, 'Captcha') or contains(@name, 'Captcha')]"
         )
         captcha_input.clear()
         captcha_input.send_keys(solution)
         print(f"[✔] Successfully entered captcha solution: {solution}")
-
-        # Optional: Submit button click karne ke liye
-        # submit_btn = driver.find_element(By.XPATH, "//button[@id='submit-btn']")
-        # submit_btn.click()
-        # time.sleep(4)
+        
+        # Thoda wait taake form process ho sake
+        time.sleep(3)
     except Exception as captcha_err:
       print(f"[!] Captcha element not found or skipped: {captcha_err}")
 
@@ -156,7 +156,7 @@ def main():
     if len(page_source.encode("utf-8")) > MAX_PAGE_BYTES:
       raise RuntimeError("Status page exceeded the 2 MB safety limit.")
 
-    text = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", page_source, flags=re.I | re.S)
+    text = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", page_source, flags=I | S if 'I' in globals() else re.I | re.S)
     text = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", text, flags=re.I | re.S)
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
