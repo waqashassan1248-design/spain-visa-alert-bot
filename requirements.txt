@@ -1,0 +1,2 @@
+# The current monitor.py uses only Python standard-library modules.
+# No third-party packages are required for public status-page monitoring.
