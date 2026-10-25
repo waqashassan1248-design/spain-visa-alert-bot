@@ -1,4 +1,3 @@
-from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -8,193 +7,211 @@ import time
 import urllib.error
 import urllib.request
 
-# Computer Vision & OCR libraries for Captcha
-import cv2
-import easyocr
-import numpy as np
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 MAX_PAGE_BYTES = 2_000_000
 STATE_PATH = Path(os.environ.get("MONITOR_STATE_FILE", ".monitor-state/state.json"))
 
-# Initialize EasyOCR reader (optimized for digits)
-print("[*] Initializing EasyOCR reader...")
-ocr_reader = easyocr.Reader(["en"], gpu=False)
+CAPTCHA_PHRASES = (
+    "select correct number boxes",
+    "captcha",
+    "verify you are human",
+    "human verification",
+    "security verification",
+    "prove you are not a robot",
+    "unusual activity",
+)
+LOGIN_PHRASES = (
+    "sign in",
+    "log in",
+    "login",
+    "password",
+    "not registered yet",
+)
+HUMAN_CHECK_PATHS = ("/captcha", "/account/bot", "/userverification")
 
 
 def send_telegram_message(message):
-  token = os.environ.get("TELEGRAM_BOT_TOKEN")
-  chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-  if not token or not chat_id:
-    raise RuntimeError(
-        "Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID GitHub Secret."
-    )
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        raise RuntimeError(
+            "Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID GitHub Actions secret."
+        )
 
-  url = f"https://api.telegram.org/bot{token}/sendMessage"
-  body = json.dumps({
-      "chat_id": chat_id,
-      "text": message,
-      "disable_web_page_preview": True,
-  }).encode("utf-8")
-  request = urllib.request.Request(
-      url, data=body, headers={"Content-Type": "application/json"}, method="POST"
-  )
-  with urllib.request.urlopen(request, timeout=20) as response:
-    result = json.loads(response.read().decode("utf-8"))
-  if not result.get("ok"):
-    raise RuntimeError("Telegram rejected the message.")
-  print("Telegram notification sent.")
+    # Never print or log this URL: it contains the Telegram bot token.
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    body = json.dumps({
+        "chat_id": chat_id,
+        "text": message,
+        "disable_web_page_preview": True,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Telegram API returned HTTP {exc.code}. Check the Telegram secrets.") from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not reach Telegram API: {exc.reason}") from None
+
+    if not result.get("ok"):
+        raise RuntimeError("Telegram did not accept the message. Check the bot and chat ID.")
+    print("Telegram notification sent.")
 
 
 def read_state():
-  try:
-    return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-  except (OSError, json.JSONDecodeError):
-    return {}
+    try:
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def write_state(state):
-  STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-  STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
 
 
-def solve_numeric_captcha(captcha_element):
-  """Captcha element se screenshot bytes leta hai, OCR se numbers read karta hai,
+def page_text(driver):
+    source = driver.page_source
+    if len(source.encode("utf-8")) > MAX_PAGE_BYTES:
+        raise RuntimeError("Status page exceeded the 2 MB safety limit.")
+    # Remove scripts/styles before looking for visible page wording.
+    source = re.sub(r"<script\\b[^>]*>.*?</script\\s*>", " ", source, flags=re.I | re.S)
+    source = re.sub(r"<style\\b[^>]*>.*?</style\\s*>", " ", source, flags=re.I | re.S)
+    source = re.sub(r"<[^>]+>", " ", source)
+    return re.sub(r"\\s+", " ", source).strip().casefold()
 
-  aur check karta hai ke koi number minimum 3 baar repeat ho raha hai ya nahi.
-  """
-  try:
-    # 1. Capture screenshot bytes of the captcha image
-    captcha_bytes = captcha_element.screenshot_as_png
 
-    # 2. Convert bytes to OpenCV image format
-    nparr = np.frombuffer(captcha_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+def classify_page(driver, text, available_text, no_slots_text):
+    current_url = driver.current_url.casefold()
 
-    # 3. Read text using EasyOCR (allowlist restricted to digits)
-    results = ocr_reader.readtext(gray, allowlist="0123456789")
-    extracted_text = "".join([res[1] for res in results])
-    print(f"[+] Extracted Captcha Digits: {extracted_text}")
+    # Detect a visible CAPTCHA/human check and stop. Never attempt to solve or bypass it.
+    captcha_visible = False
+    try:
+        captcha_visible = any(
+            element.is_displayed()
+            for element in driver.find_elements(
+                By.XPATH,
+                "//*[contains(translate(@id,'CAPTCHA','captcha'),'captcha') "
+                "or contains(translate(@src,'CAPTCHA','captcha'),'captcha') "
+                "or contains(translate(@class,'CAPTCHA','captcha'),'captcha')]",
+            )
+        )
+    except Exception:
+        pass
 
-    # 4. Logic: Minimum 3 numbers same match hone chahiye
-    counts = Counter(extracted_text)
-    matched_numbers = [digit for digit, count in counts.items() if count >= 3]
+    if captcha_visible or any(phrase in text for phrase in CAPTCHA_PHRASES):
+        return "captcha_or_human_verification"
+    if any(path in current_url for path in HUMAN_CHECK_PATHS):
+        return "captcha_or_human_verification"
 
-    if matched_numbers:
-      print(f"[✔] Match Found! Numbers appearing 3+ times: {matched_numbers}")
-      # Jo number repeat ho raha hai, usko return karein
-      return matched_numbers[0]
-    else:
-      print("[✖] No number found repeating 3 or more times.")
-      return None
-  except Exception as e:
-    print(f"[!] Error in captcha solver: {e}")
+    # A login page is not treated as appointment availability.
+    password_fields = driver.find_elements(By.CSS_SELECTOR, "input[type='password']")
+    if password_fields or (
+        any(word in current_url for word in ("/login", "/log-in", "/signin"))
+        and any(phrase in text for phrase in LOGIN_PHRASES)
+    ):
+        return "login_required"
+
+    if no_slots_text and no_slots_text.casefold() in text:
+        return "not_available"
+    if available_text and available_text.casefold() in text:
+        return "available"
+    return "unknown"
+
+
+def notification_for(status, url):
+    if status == "captcha_or_human_verification":
+        return (
+            "🛑 BLS monitoring paused: CAPTCHA or human verification was detected. "
+            "Please open the official page and complete verification manually.\n" + url
+        )
+    if status == "login_required":
+        return (
+            "🔐 BLS monitoring needs your attention: the page requires login. "
+            "Please sign in manually in your browser; the monitor will not bypass verification.\n" + url
+        )
+    if status == "available":
+        return (
+            "📢 Spain visa appointment status: the configured availability text was found. "
+            "Please open the official website and confirm the result.\n" + url
+        )
+    if status == "unknown":
+        return (
+            "⚠️ BLS monitor could not identify the appointment status. The page may have changed "
+            "or may require manual review.\n" + url
+        )
     return None
 
 
 def main():
-  url = os.environ.get("PUBLIC_STATUS_URL", "").strip()
-  available_text = os.environ.get("APPOINTMENT_AVAILABLE_TEXT", "").strip()
-  no_slots_text = os.environ.get(
-      "NO_APPOINTMENTS_TEXT", "No appointments available"
-  ).strip()
+    url = os.environ.get("PUBLIC_STATUS_URL", "").strip()
+    available_text = os.environ.get("APPOINTMENT_AVAILABLE_TEXT", "").strip()
+    no_slots_text = os.environ.get("NO_APPOINTMENTS_TEXT", "No appointments available").strip()
 
-  if not url:
-    raise RuntimeError("Add PUBLIC_STATUS_URL as a GitHub Actions Secret.")
-  if not available_text:
-    raise RuntimeError("Add APPOINTMENT_AVAILABLE_TEXT as a GitHub Secret.")
-  if not url.startswith("https://"):
-    raise RuntimeError("PUBLIC_STATUS_URL must use HTTPS.")
+    if not url:
+        raise RuntimeError("Add PUBLIC_STATUS_URL as a GitHub Actions secret or variable.")
+    if not url.startswith("https://"):
+        raise RuntimeError("PUBLIC_STATUS_URL must use HTTPS.")
+    if not available_text:
+        raise RuntimeError("Add APPOINTMENT_AVAILABLE_TEXT as a GitHub Actions secret or variable.")
 
-  # Setup Headless Chrome for GitHub Actions
-  print("[*] Launching headless browser...")
-  chrome_options = Options()
-  chrome_options.add_argument("--headless")
-  chrome_options.add_argument("--no-sandbox")
-  chrome_options.add_argument("--disable-dev-shm-usage")
-  chrome_options.add_argument("--disable-gpu")
-  chrome_options.add_argument("--window-size=1920,1080")
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-notifications")
 
-  driver = webdriver.Chrome(options=chrome_options)
-
-  try:
-    driver.get(url)
-    time.sleep(5)  # Page load hone ka wait
-
-    # --- CAPTCHA SOLVER INTEGRATION ---
+    driver = webdriver.Chrome(options=options)
     try:
-      # BLS captcha image aur input ke flexible XPaths
-      captcha_img = WebDriverWait(driver, 10).until(
-          EC.presence_of_element_located(
-              (By.XPATH, "//img[contains(@id, 'Captcha') or contains(@src, 'Captcha')]")
-          )
-      )
-
-      solution = solve_numeric_captcha(captcha_img)
-
-      if solution:
-        # Captcha input field mein solution enter karein
-        captcha_input = driver.find_element(
-            By.XPATH, "//input[contains(@id, 'Captcha') or contains(@name, 'Captcha')]"
+        driver.set_page_load_timeout(45)
+        print("Opening configured BLS status page...")
+        driver.get(url)
+        WebDriverWait(driver, 20).until(
+            lambda browser: browser.execute_script("return document.readyState") in ("interactive", "complete")
         )
-        captcha_input.clear()
-        captcha_input.send_keys(solution)
-        print(f"[✔] Successfully entered captcha solution: {solution}")
-        
-        # Thoda wait taake form process ho sake
-        time.sleep(3)
-    except Exception as captcha_err:
-      print(f"[!] Captcha element not found or skipped: {captcha_err}")
+        time.sleep(2)
 
-    # Page ka final source code read karein availability check karne ke liye
-    page_source = driver.page_source
-    if len(page_source.encode("utf-8")) > MAX_PAGE_BYTES:
-      raise RuntimeError("Status page exceeded the 2 MB safety limit.")
+        text = page_text(driver)
+        status = classify_page(driver, text, available_text, no_slots_text)
+        old_state = read_state()
+        previous = old_state.get("status")
 
-    text = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", page_source, flags=I | S if 'I' in globals() else re.I | re.S)
-    text = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    lowered = text.casefold()
+        # Notify on first observation of a state or when it changes, avoiding repeat alerts every run.
+        if status != previous:
+            message = notification_for(status, url)
+            if message:
+                send_telegram_message(message)
+            else:
+                print("No-slots phrase detected; no Telegram alert sent.")
+        else:
+            print(f"Status unchanged: {status}")
 
-    old_state = read_state()
-    if no_slots_text and no_slots_text.casefold() in lowered:
-      status = "not_available"
-    elif available_text.casefold() in lowered:
-      status = "available"
-    else:
-      status = "unknown"
-
-    previous = old_state.get("status")
-    if status == "available" and previous != "available":
-      send_telegram_message(
-          "⚠️ Spain visa appointment status may have changed. The configured"
-          " availability text was found on the page. Please open the official"
-          " website and confirm:\n"
-          + url
-      )
-      print("Availability phrase detected; Telegram alert sent.")
-    elif status == "not_available":
-      print("Official no-appointments text detected. No alert sent.")
-    elif status == "unknown":
-      print("Configured availability phrase was not found.")
-    else:
-      print("Availability status unchanged.")
-
-    write_state({"status": status})
-
-  finally:
-    driver.quit()
+        write_state({"status": status, "checked_at": int(time.time())})
+        print(f"Monitor result: {status}")
+    finally:
+        driver.quit()
 
 
 if __name__ == "__main__":
-  try:
-    main()
-  except Exception as exc:
-    print(f"Monitor failed: {exc}", file=sys.stderr)
-    sys.exit(1)
+    try:
+        main()
+    except Exception as exc:
+        print(f"Monitor failed: {exc}", file=sys.stderr)
+        # Best-effort alert for operational errors; don't mask the original failure.
+        try:
+            send_telegram_message(
+                "❌ Spain visa monitor failed to run. Check the latest GitHub Actions log. "
+                "No credentials or session data are included in this alert."
+            )
+        except Exception as notify_exc:
+            print(f"Failure alert could not be sent: {notify_exc}", file=sys.stderr)
+        sys.exit(1)
