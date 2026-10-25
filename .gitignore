@@ -1,0 +1,30 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+
+# Runtime state, logs, and temporary files
+.monitor-state/
+*.log
+*.tmp
+
+# Selenium / browser artifacts
+chromedriver.log
+selenium-profile/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
