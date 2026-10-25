@@ -1,6 +1,2 @@
 selenium
 webdriver-manager
-opencv-python-headless
-easyocr
-numpy
-pillow
