@@ -151,16 +151,18 @@ def notification_for(status, url):
 
 
 def main():
-    url = os.environ.get("PUBLIC_STATUS_URL", "").strip()
+    # A protected BLS login page is sufficient for login/CAPTCHA detection.
+    # A public appointment-status page and availability phrase are optional.
+    url = (
+        os.environ.get("PUBLIC_STATUS_URL", "").strip()
+        or os.environ.get("BLS_LOGIN_URL", "").strip()
+        or "https://saudi.blsspainglobal.com/Global/Account/LogIn?ReturnUrl=%2Fglobal%2Fappointment%2Fnewappointment"
+    )
     available_text = os.environ.get("APPOINTMENT_AVAILABLE_TEXT", "").strip()
     no_slots_text = os.environ.get("NO_APPOINTMENTS_TEXT", "No appointments available").strip()
 
-    if not url:
-        raise RuntimeError("Add PUBLIC_STATUS_URL as a GitHub Actions secret or variable.")
     if not url.startswith("https://"):
-        raise RuntimeError("PUBLIC_STATUS_URL must use HTTPS.")
-    if not available_text:
-        raise RuntimeError("Add APPOINTMENT_AVAILABLE_TEXT as a GitHub Actions secret or variable.")
+        raise RuntimeError("The configured BLS URL must use HTTPS.")
 
     options = Options()
     options.add_argument("--headless=new")
@@ -174,10 +176,17 @@ def main():
     try:
         driver.set_page_load_timeout(45)
         print("Opening configured BLS status page...")
-        driver.get(url)
-        WebDriverWait(driver, 20).until(
-            lambda browser: browser.execute_script("return document.readyState") in ("interactive", "complete")
-        )
+        try:
+            driver.get(url)
+        except Exception as page_error:
+            # A slow/blocked page can still have useful login/CAPTCHA content.
+            print(f"Page navigation warning: {type(page_error).__name__}")
+        try:
+            WebDriverWait(driver, 20).until(
+                lambda browser: browser.execute_script("return document.readyState") in ("interactive", "complete")
+            )
+        except Exception:
+            print("Page readiness wait ended; checking whatever page content loaded.")
         time.sleep(2)
 
         text = page_text(driver)
