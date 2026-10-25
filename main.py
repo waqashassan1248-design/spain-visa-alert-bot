@@ -82,10 +82,10 @@ def page_text(driver):
     if len(source.encode("utf-8")) > MAX_PAGE_BYTES:
         raise RuntimeError("Status page exceeded the 2 MB safety limit.")
     # Remove scripts/styles before looking for visible page wording.
-    source = re.sub(r"<script\\b[^>]*>.*?</script\\s*>", " ", source, flags=re.I | re.S)
-    source = re.sub(r"<style\\b[^>]*>.*?</style\\s*>", " ", source, flags=re.I | re.S)
+    source = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", source, flags=re.I | re.S)
+    source = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", source, flags=re.I | re.S)
     source = re.sub(r"<[^>]+>", " ", source)
-    return re.sub(r"\\s+", " ", source).strip().casefold()
+    return re.sub(r"\s+", " ", source).strip().casefold()
 
 
 def classify_page(driver, text, available_text, no_slots_text):
