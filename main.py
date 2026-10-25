@@ -113,9 +113,12 @@ def classify_page(driver, text, available_text, no_slots_text):
 
     # A login page is not treated as appointment availability.
     password_fields = driver.find_elements(By.CSS_SELECTOR, "input[type='password']")
-    if password_fields or (
-        any(word in current_url for word in ("/login", "/log-in", "/signin"))
-        and any(phrase in text for phrase in LOGIN_PHRASES)
+    # The configured URL itself is the BLS login endpoint. Treat that route
+    # as login-required even if the protected page loads incompletely and its
+    # form/text is not present in the rendered DOM.
+    if password_fields or any(
+        path in current_url
+        for path in ("/login", "/log-in", "/signin")
     ):
         return "login_required"
 
