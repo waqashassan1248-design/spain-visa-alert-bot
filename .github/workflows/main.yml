@@ -1,24 +1,83 @@
-name: Test Telegram Bot
+name: Spain Visa Appointment Monitor
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose a Telegram test or run the BLS monitor"
+        required: true
+        type: choice
+        options:
+          - monitor
+          - telegram-test
+        default: monitor
+  schedule:
+    - cron: "*/15 * * * *"
 
 permissions:
   contents: read
 
-jobs:
-  telegram-test:
-    runs-on: ubuntu-latest
+concurrency:
+  group: spain-visa-monitor
+  cancel-in-progress: false
 
+jobs:
+  monitor:
+    if: github.event_name == 'schedule' || inputs.mode == 'monitor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Restore monitor state
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          key: monitor-state-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            monitor-state-${{ github.ref_name }}-
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check configured page and send alerts
+        env:
+          PUBLIC_STATUS_URL: ${{ secrets.PUBLIC_STATUS_URL }}
+          APPOINTMENT_AVAILABLE_TEXT: ${{ secrets.APPOINTMENT_AVAILABLE_TEXT }}
+          NO_APPOINTMENTS_TEXT: ${{ secrets.NO_APPOINTMENTS_TEXT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MONITOR_STATE_FILE: .monitor-state/state.json
+        run: python main.py
+
+      - name: Save monitor state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: monitor-state-${{ github.ref_name }}-${{ github.run_id }}
+
+  telegram-test:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'telegram-test'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Send Telegram test message
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
