@@ -130,25 +130,28 @@ def classify_page(driver, text, available_text, no_slots_text):
 
 
 def notification_for(status, url):
+    # Link users to the official BLS information homepage rather than a deep
+    # login route that may reject direct opens or require an existing session.
+    user_url = "https://saudi.blsspainvisa.com/"
     if status == "captcha_or_human_verification":
         return (
             "🛑 BLS monitoring paused: CAPTCHA or human verification was detected. "
-            "Please open the official page and complete verification manually.\n" + url
+            "Please open the official page and complete verification manually.\n" + user_url
         )
     if status == "login_required":
         return (
             "🔐 BLS monitoring needs your attention: the page requires login. "
-            "Please sign in manually in your browser; the monitor will not bypass verification.\n" + url
+            "Please sign in manually in your browser; the monitor will not bypass verification.\n" + user_url
         )
     if status == "available":
         return (
             "📢 Spain visa appointment status: the configured availability text was found. "
-            "Please open the official website and confirm the result.\n" + url
+            "Please open the official website and confirm the result.\n" + user_url
         )
     if status == "unknown":
         return (
             "⚠️ BLS monitor could not identify the appointment status. The page may have changed "
-            "or may require manual review.\n" + url
+            "or may require manual review.\n" + user_url
         )
     return None
 
